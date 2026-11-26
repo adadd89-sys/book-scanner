@@ -1,6 +1,6 @@
 name = "booksheet"
 main = "src/index.ts"
-compatibility_date = "2026-11-27"
+compatibility_date = "2026-11-25"
 workers_dev = true
 
 [observability]
