@@ -1,4 +1,4 @@
-name = "book-scanner"
+name = "booksheet"
 main = "src/index.ts"
 compatibility_date = "2026-11-27"
 workers_dev = true
