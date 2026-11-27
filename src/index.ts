@@ -78,36 +78,36 @@ function imageMimeFromPath(path:string):string{
   return types[ext]||"image/jpeg";
 }
 async function inspectBook(image:string,mime:string,caption:string,env:Env):Promise<Book>{
-  const model=env.GEMINI_MODEL||"gemini-3.8-flash";
   const prompt=`Определи книгу по фото обложки: точное название, автора, по возможности конкретное издание. Не угадывай нечитаемые данные — если автор неизвестен, верни пустую строку. Подпись пользователя: ${caption||"нет"}.
 На этом этапе НЕ ищи цены и НЕ выдумывай ссылки или стоимость. Для price_from и price_to верни null, для min_price_url верни пустую строку. В source_note напиши: "Название и автор распознаны; оценка цен будет выполнена отдельным этапом".
 Верни только JSON: {"title":"строка","author":"строка","price_from":null,"price_to":null,"min_price_url":"","source_note":"строка"}`;
   const payload={contents:[{role:"user",parts:[{text:prompt},{inline_data:{mime_type:mime,data:image}}]}],
-    generationConfig:{temperature:0.1,responseMimeType:"application/json"}};
-  const models=[...new Set([model,env.GEMINI_FALLBACK_MODEL].filter((v):v is string=>Boolean(v)))];
-  let data:any=null;
+    generationConfig:{temperature:0.1,responseMimeType:"application/json",thinkingConfig:{thinkingLevel:"minimal"}}};
+  const models=[...new Set([env.GEMINI_MODEL||"gemini-3.8-flash",env.GEMINI_FALLBACK_MODEL||"gemini-3.5-flash-lite"].filter((v):v is string=>Boolean(v)))];
   let lastError="Gemini temporarily unavailable";
-  const deadline=Date.now()+27000;
+  const deadline=Date.now()+20000;
   for(const candidate of models){
-    let succeeded=false;
     try{
-      const remaining=Math.max(1000,Math.min(24000,deadline-Date.now()));
+      const remaining=deadline-Date.now();
+      if(remaining<1500) break;
       const response=await fetch(`${GEMINI}${encodeURIComponent(candidate)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`,{
         method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload),
-        signal:AbortSignal.timeout(remaining)
+        signal:AbortSignal.timeout(Math.min(9000,remaining-500))
       });
-      data=await response.json() as any;
-      if(response.ok){succeeded=true;}
-      else lastError=data?.error?.message||`Gemini API HTTP ${response.status}`;
+      const data=await response.json() as any;
+      if(!response.ok){
+        lastError=data?.error?.message||`Gemini API HTTP ${response.status}`;
+        continue;
+      }
+      const raw=data?.candidates?.[0]?.content?.parts?.map((p:any)=>p.text||"").join("")||"";
+      if(!raw){lastError=`Модель ${candidate} вернула пустой ответ`;continue;}
+      const parsed=parseJson(raw);
+      const title=str(parsed.title);
+      if(!title){lastError=`Модель ${candidate} не распознала название книги`;continue;}
+      return {title,author:str(parsed.author),price_from:null,price_to:null,min_price_url:"",source_note:str(parsed.source_note)||"Книга распознана; цены пока не оценивались"};
     }catch(e){lastError=e instanceof Error?e.message:String(e);}
-    if(succeeded) break;
-    data=null;
-    if(Date.now()>=deadline) break;
   }
-  if(!data) throw new Error("Gemini временно перегружен или недоступен. Повторите отправку позже. Подробности: "+lastError);
-  const raw=data?.candidates?.[0]?.content?.parts?.map((p:any)=>p.text||"").join("")||"";
-  const parsed=parseJson(raw);
-  return {title:str(parsed.title),author:str(parsed.author),price_from:null,price_to:null,min_price_url:"",source_note:str(parsed.source_note)||"Книга распознана; цены пока не оценивались"};
+  throw new Error("Обе модели Gemini не завершили распознавание. Подробности: "+lastError);
 }
 function parseJson(s:string):any{const t=s.replace(/^```(?:json)?/i,"").replace(/```$/i,"").trim();const a=t.indexOf("{"),b=t.lastIndexOf("}");if(a<0||b<=a)throw new Error("Gemini вернул ответ без JSON");return JSON.parse(t.slice(a,b+1));}
 async function tg(env:Env,method:string,body:Record<string,unknown>):Promise<any>{
