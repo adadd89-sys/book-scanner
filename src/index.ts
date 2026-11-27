@@ -57,7 +57,9 @@ async function handlePhoto(message: NonNullable<Update["message"]>,env:Env) {
     if (!image.ok) throw new Error("Не удалось скачать фото");
     const bytes=await image.arrayBuffer();
     if(bytes.byteLength>20*1024*1024) throw new Error("Фото больше 20 МБ");
-    const book=await inspectBook(toBase64(bytes),image.headers.get("content-type")||"image/jpeg",message.caption||"",env);
+    const headerMime=(image.headers.get("content-type")||"").split(";")[0].trim().toLowerCase();
+    const mime=headerMime.startsWith("image/")?headerMime:imageMimeFromPath(path);
+    const book=await inspectBook(toBase64(bytes),mime,message.caption||"",env);
     if(!book.title) throw new Error("Название не распознано. Попробуй прислать фото обложки крупнее.");
     const saved=await fetch(env.GOOGLE_SCRIPT_URL,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({
       secret:env.SHEETS_SECRET,title:book.title,author:book.author,price_from:book.price_from,price_to:book.price_to,
@@ -68,6 +70,11 @@ async function handlePhoto(message: NonNullable<Update["message"]>,env:Env) {
     const prices=book.price_from===null?"цена не найдена":`${rub(book.price_from)}–${rub(book.price_to??book.price_from)} ₽`;
     await send(env,chat,`✅ Добавлено в таблицу отдельной строкой\n\n📖 <b>${esc(book.title)}</b>\n✍️ ${esc(book.author||"Автор не определён")}\n💰 ${prices}\n🔎 ${esc(book.source_note||"Источники не указаны")}`);
   } catch(e) { await send(env,chat,"❌ "+esc(e instanceof Error?e.message:String(e))); }
+}
+function imageMimeFromPath(path:string):string{
+  const ext=path.toLowerCase().split("?")[0].split(".").pop()||"";
+  const types:Record<string,string>={jpg:"image/jpeg",jpeg:"image/jpeg",png:"image/png",webp:"image/webp",gif:"image/gif",bmp:"image/bmp",heic:"image/heic"};
+  return types[ext]||"image/jpeg";
 }
 async function inspectBook(image:string,mime:string,caption:string,env:Env):Promise<Book>{
   const model=env.GEMINI_MODEL||"gemini-3.8-flash";
