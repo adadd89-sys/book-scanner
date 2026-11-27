@@ -89,14 +89,16 @@ async function inspectBook(image:string,mime:string,caption:string,env:Env):Prom
     generationConfig:{responseMimeType:"application/json",thinkingConfig:{thinkingBudget:0}}};
   const VISION_MODELS=["gemini-3.5-flash-lite","gemini-3.6-flash","gemini-3.8-flash"];
   let lastError="Gemini temporarily unavailable";
-  const deadline=Date.now()+20000;
-  for(const candidate of VISION_MODELS){
+  const timeouts=[18000,7000,4000];
+  const deadline=Date.now()+29000;
+  for(let modelIndex=0;modelIndex<VISION_MODELS.length;modelIndex++){
+    const candidate=VISION_MODELS[modelIndex];
     try{
       const remaining=deadline-Date.now();
       if(remaining<1500) break;
       const response=await fetch(`${GEMINI}${encodeURIComponent(candidate)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`,{
         method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload),
-        signal:AbortSignal.timeout(Math.min(9000,remaining-500))
+        signal:AbortSignal.timeout(Math.min(timeouts[modelIndex],remaining-500))
       });
       const data=await response.json() as any;
       if(!response.ok){
@@ -111,7 +113,7 @@ async function inspectBook(image:string,mime:string,caption:string,env:Env):Prom
       return {title,author:str(parsed.author),price_from:null,price_to:null,min_price_url:"",source_note:str(parsed.source_note)||"Книга распознана; цены пока не оценивались"};
     }catch(e){lastError=e instanceof Error?e.message:String(e);}
   }
-  throw new Error("Обе модели Gemini не завершили распознавание. Подробности: "+lastError);
+  throw new Error("Gemini не завершил распознавание после 3 попыток. Последняя ошибка: "+lastError);
 }
 async function searchOzonPrices(book:Book,env:Env):Promise<{price_from:number|null;price_to:number|null;min_price_url:string;source_note:string}|null>{
   if(!env.SERPER_API_KEY){
