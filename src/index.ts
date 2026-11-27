@@ -87,19 +87,22 @@ async function inspectBook(image:string,mime:string,caption:string,env:Env):Prom
   const models=[...new Set([model,env.GEMINI_FALLBACK_MODEL].filter((v):v is string=>Boolean(v)))];
   let data:any=null;
   let lastError="Gemini temporarily unavailable";
+  const deadline=Date.now()+22000;
   for(const candidate of models){
     let succeeded=false;
-    for(let attempt=0;attempt<3;attempt++){
+    for(let attempt=0;attempt<2&&Date.now()<deadline;attempt++){
       try{
+        const remaining=Math.max(1000,Math.min(9000,deadline-Date.now()));
         const response=await fetch(`${GEMINI}${encodeURIComponent(candidate)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`,{
-          method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)
+          method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload),
+          signal:AbortSignal.timeout(remaining)
         });
         data=await response.json() as any;
         if(response.ok){succeeded=true;break;}
         lastError=data?.error?.message||`Gemini API HTTP ${response.status}`;
         if(response.status!==429&&response.status!==500&&response.status!==502&&response.status!==503&&response.status!==504) break;
       }catch(e){lastError=e instanceof Error?e.message:String(e);}
-      if(attempt<2) await new Promise(resolve=>setTimeout(resolve,1200*(attempt+1)));
+      if(attempt===0&&Date.now()<deadline) await new Promise(resolve=>setTimeout(resolve,700));
     }
     if(succeeded) break;
     data=null;
