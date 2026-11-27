@@ -70,7 +70,7 @@ async function handlePhoto(message: NonNullable<Update["message"]>,env:Env) {
   } catch(e) { await send(env,chat,"❌ "+esc(e instanceof Error?e.message:String(e))); }
 }
 async function inspectBook(image:string,mime:string,caption:string,env:Env):Promise<Book>{
-  const model=env.GEMINI_MODEL||"gemini-2.5-flash";
+  const model=env.GEMINI_MODEL||"gemini-3.8-flash";
   const prompt=`Определи книгу по фото обложки: точное название, автора, по возможности конкретное издание. Затем поищи актуальные предложения в России: в первую очередь Ozon, затем Авито и другие книжные магазины/букинистические площадки. Оцени диапазон реальных цен в рублях. Не выдумывай цены и ссылки. Не смешивай разные издания с похожим названием. Если цены новой и б/у книги различаются, отметь это. Если цену подтвердить нельзя, верни null. Ссылка должна вести на найденную страницу товара/предложения, если она есть. Подпись пользователя: ${caption||"нет"}.
 Верни только JSON: {"title":"строка","author":"строка","price_from":число или null,"price_to":число или null,"min_price_url":"URL или пустая строка","source_note":"краткое пояснение площадок, цен и неопределённости"}`;
   const response=await fetch(`${GEMINI}${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`,{
@@ -94,7 +94,7 @@ async function tg(env:Env,method:string,body:Record<string,unknown>):Promise<any
   const r=await fetch(`${TG}/bot${env.TELEGRAM_BOT_TOKEN}/${method}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
   const d=await r.json() as any;if(!r.ok||!d.ok)throw new Error(d.description||"Ошибка Telegram API");return d;
 }
-async function send(env:Env,chat:number,text:string){await tg(env,"sendMessage",{chat_id:chat,text,parse_mode:"HTML",disable_web_page_preview:true});}
+async function send(env:Env,chat:number,text:string){await tg(env, "sendMessage",{chat_id:chat,text,parse_mode:"HTML",disable_web_page_preview:true});}
 function toBase64(buf:ArrayBuffer){const a=new Uint8Array(buf);let s="";for(let i=0;i<a.length;i+=0x8000)s+=String.fromCharCode(...a.subarray(i,i+0x8000));return btoa(s);}
 function str(v:unknown){return typeof v==="string"?v.trim().slice(0,2000):"";}
 function price(v:unknown):number|null{const n=typeof v==="number"?v:Number(v);return Number.isFinite(n)&&n>0?Math.round(n):null;}
