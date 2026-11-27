@@ -113,16 +113,24 @@ async function inspectBook(image:string,mime:string,caption:string,env:Env):Prom
   throw new Error("Обе модели Gemini не завершили распознавание. Подробности: "+lastError);
 }
 async function searchOzonPrices(book:Book,env:Env):Promise<{price_from:number|null;price_to:number|null;min_price_url:string;source_note:string}|null>{
-  const prompt=`Найди реальные предложения ТОЛЬКО на Ozon.ru для книги:
-Название: "${book.title}"
+  const prompt=`Используй Google Search и ищи ТОЛЬКО товары на Ozon.ru.
+Книга: "${book.title}"
 Автор: "${book.author}"
-Ищи точное совпадение названия и автора. Допускаются новые и бывшие в употреблении экземпляры, если карточка именно этой книги. Не используй другие маркетплейсы, объявления, библиотеки или цены из памяти.
-Верни только JSON без markdown:
-{"offers":[{"price":число_в_рублях,"url":"полная ссылка на карточку товара Ozon","title":"название из карточки","condition":"новая/б\u002fy"}]}
-Включай только предложения, для которых в найденном результате действительно видны цена и ссылка на конкретную карточку товара Ozon. Не выдумывай цены, URL или товары. Если точных предложений нет, верни {"offers":[]}. Не включай поисковую страницу вместо карточки товара.`;
+
+Обязательно выполни несколько отдельных поисков Google:
+1) site:ozon.ru/product "${book.title}" "${book.author}" книга
+2) site:ozon.ru "${book.title}" "${book.author}" бу книга
+3) site:ozon.ru "${book.title}" "${book.author}" купить
+
+Учитывай И НОВЫЕ, И Б/У экземпляры. Если в карточке не указано состояние, всё равно учитывай её как предложение, но не называй её б/у или новой.
+Проверяй, что название и автор относятся к этой книге. Не включай похожие книги, другие произведения автора, поисковые страницы и другие магазины.
+Верни только JSON:
+{"offers":[{"price":число_в_рублях,"url":"точный URL конкретной карточки товара Ozon","title":"название товара","condition":"new/used/unknown"}]}
+Включай только предложения, где Google Search действительно показал цену и конкретную ссылку Ozon. URL должен быть одним из источников, найденных поиском. Не придумывай цену и ссылку. Если точных карточек нет, верни {"offers":[]}.
+`;
   const models=["gemini-3.8-flash","gemini-3.5-flash-lite"];
   let lastError="";
-  const searchDeadline=Date.now()+9500;
+  const searchDeadline=Date.now()+10500;
   for(const model of models){
     try{
       const remaining=searchDeadline-Date.now();
@@ -131,16 +139,20 @@ async function searchOzonPrices(book:Book,env:Env):Promise<{price_from:number|nu
         method:"POST",
         headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY,"Api-Revision":"2026-05-20"},
         body:JSON.stringify({model,input:prompt,tools:[{type:"google_search"}]}),
-        signal:AbortSignal.timeout(Math.min(5000,remaining-250))
+        signal:AbortSignal.timeout(Math.min(6000,remaining-250))
       });
       const data=await response.json() as any;
       if(!response.ok){lastError=data?.error?.message||`HTTP ${response.status}`;continue;}
       const interaction=data?.interaction||data;
       const steps=interaction?.steps||[];
-      const raw=steps.filter((s:any)=>s.type==="model_output").flatMap((s:any)=>s.content||[])
-        .filter((c:any)=>c.type==="text").map((c:any)=>c.text||"").join("\n")
-        ||interaction?.output_text||data?.output_text||"";
-      if(!raw){lastError="Поиск вернул пустой ответ";continue;}
+      const blocks=steps.filter((s:any)=>s.type==="model_output").flatMap((s:any)=>s.content||[])
+        .filter((c:any)=>c.type==="text");
+      const raw=blocks.map((c:any)=>c.text||"").join("\\n")||interaction?.output_text||data?.output_text||"";
+      if(!raw){lastError="Google Search не вернул текстовый ответ";continue;}
+      const citedOzonUrls=blocks.flatMap((c:any)=>(c.annotations||[])
+        .filter((a:any)=>a.type==="url_citation"&&typeof a.url==="string")
+        .map((a:any)=>a.url))
+        .filter((url:string)=>{try{const u=new URL(url);return u.protocol==="https:"&&(u.hostname==="ozon.ru"||u.hostname.endsWith(".ozon.ru"));}catch{return false;}});
       const parsed=parseJson(raw);
       const offers=Array.isArray(parsed.offers)?parsed.offers:[];
       const valid=offers.map((o:any)=>{
@@ -148,18 +160,23 @@ async function searchOzonPrices(book:Book,env:Env):Promise<{price_from:number|nu
         const url=str(o.url);
         try{
           const u=new URL(url);
-          if(u.protocol!=="https:"||!(u.hostname==="ozon.ru"||u.hostname.endsWith(".ozon.ru"))||!value)return null;
+          const isOzon=u.protocol==="https:"&&(u.hostname==="ozon.ru"||u.hostname.endsWith(".ozon.ru"));
+          const cited=citedOzonUrls.some((source:string)=>source===url);
+          if(!isOzon||!cited||!value)return null;
           return {price:value,url};
         }catch{return null;}
       }).filter((o:any)=>o!==null) as Array<{price:number;url:string}>;
-      if(!valid.length)return {price_from:null,price_to:null,min_price_url:"",source_note:"На Ozon не найдено подтверждённых карточек с ценой для точного совпадения книги"};
+      if(!valid.length){
+        lastError=citedOzonUrls.length?"Google нашёл Ozon, но не подтвердил цену конкретной карточки":"Google Search не вернул подтверждённые ссылки Ozon";
+        continue;
+      }
       const prices=valid.map(o=>o.price);
       const min=Math.min(...prices),max=Math.max(...prices);
       const cheapest=valid.find(o=>o.price===min)!;
-      return {price_from:min,price_to:max,min_price_url:cheapest.url,source_note:`Ozon: проверено ${valid.length} предложений; диапазон по найденным карточкам`};
+      return {price_from:min,price_to:max,min_price_url:cheapest.url,source_note:`Google Search → Ozon: подтверждено ${valid.length} карточек; учтены новые и б/у, если состояние указано продавцом`};
     }catch(e){lastError=e instanceof Error?e.message:String(e);}
   }
-  return null;
+  return {price_from:null,price_to:null,min_price_url:"",source_note:lastError||"Google Search временно не вернул подтверждённые предложения Ozon"};
 }
 function parseJson(s:string):any{const t=s.replace(/^```(?:json)?/i,"").replace(/```$/i,"").trim();const a=t.indexOf("{"),b=t.lastIndexOf("}");if(a<0||b<=a)throw new Error("Gemini вернул ответ без JSON");return JSON.parse(t.slice(a,b+1));}
 async function tg(env:Env,method:string,body:Record<string,unknown>):Promise<any>{
