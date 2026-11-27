@@ -5,7 +5,7 @@ export interface Env {
   SHEETS_SECRET: string;
   GEMINI_MODEL?: string;
   GEMINI_FALLBACK_MODEL?: string;
-  SERPKITE_API_KEY?: string;
+  SERPER_API_KEY?: string;
 }
 interface Update {
   message?: {
@@ -114,57 +114,64 @@ async function inspectBook(image:string,mime:string,caption:string,env:Env):Prom
   throw new Error("Обе модели Gemini не завершили распознавание. Подробности: "+lastError);
 }
 async function searchOzonPrices(book:Book,env:Env):Promise<{price_from:number|null;price_to:number|null;min_price_url:string;source_note:string}|null>{
-  if(!env.SERPKITE_API_KEY){
-    return {price_from:null,price_to:null,min_price_url:"",source_note:"Поиск Google не подключён: добавь секрет SERPKITE_API_KEY в Cloudflare Worker"};
+  if(!env.SERPER_API_KEY){
+    return {price_from:null,price_to:null,min_price_url:"",source_note:"Поиск Google не подключён: добавь секрет SERPER_API_KEY в Cloudflare Worker"};
   }
-  const query=`site:ozon.ru/product "${book.title}" "${book.author}" книга цена купить`;
-  try{
-    const response=await fetch("https://api.serpkite.com/v1/search",{
-      method:"POST",
-      headers:{"content-type":"application/json","authorization":`Bearer ${env.SERPKITE_API_KEY}`},
-      body:JSON.stringify({q:query,country:"ru",language:"ru",num:10,format:"json"}),
-      signal:AbortSignal.timeout(7000)
-    });
-    const data=await response.json() as any;
-    if(!response.ok){
-      const message=str(data?.error?.message||data?.message||data?.error)||`HTTP ${response.status}`;
-      return {price_from:null,price_to:null,min_price_url:"",source_note:`Google Search API: ${message.slice(0,240)}`};
+  const queries=[
+    `site:ozon.ru/product "${book.title}" "${book.author}" книга`,
+    `site:ozon.ru "${book.title}" "${book.author}" бу книга`,
+    `site:ozon.ru "${book.title}" "${book.author}" купить`
+  ];
+  const allResults:any[]=[];
+  for(const q of queries){
+    try{
+      const response=await fetch("https://google.serper.dev/search",{
+        method:"POST",
+        headers:{"content-type":"application/json","X-API-KEY":env.SERPER_API_KEY},
+        body:JSON.stringify({q,gl:"ru",hl:"ru",num:10}),
+        signal:AbortSignal.timeout(5000)
+      });
+      const data=await response.json() as any;
+      if(!response.ok){
+        const message=str(data?.message||data?.error)||`HTTP ${response.status}`;
+        return {price_from:null,price_to:null,min_price_url:"",source_note:`Google Search API: ${message.slice(0,200)}`};
+      }
+      if(Array.isArray(data?.organic))allResults.push(...data.organic);
+    }catch(e){
+      return {price_from:null,price_to:null,min_price_url:"",source_note:`Google Search временно недоступен: ${(e instanceof Error?e.message:String(e)).slice(0,150)}`};
     }
-    const results=Array.isArray(data?.results)?data.results:[];
-    const valid:Array<{price:number;url:string;title:string}>=[];
-    for(const result of results){
-      const url=str(result?.link);
-      const title=str(result?.title);
-      const snippet=str(result?.snippet);
-      try{
-        const parsedUrl=new URL(url);
-        if(parsedUrl.protocol!=="https:"||!(parsedUrl.hostname==="ozon.ru"||parsedUrl.hostname.endsWith(".ozon.ru")))continue;
-        if(!/\/product\//i.test(parsedUrl.pathname))continue;
-        const textToCheck=`${title} ${snippet}`.toLowerCase();
-        const titleTokens=book.title.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((x:string)=>x.length>2);
-        const authorTokens=book.author.toLowerCase().split(/[^\\p{L}\\p{N}]+/u).filter((x:string)=>x.length>1);
-        const titleHits=titleTokens.filter((token:string)=>textToCheck.includes(token)).length;
-        const authorHits=authorTokens.length?authorTokens.filter((token:string)=>textToCheck.includes(token)).length:0;
-        if(titleTokens.length&&titleHits<Math.min(2,titleTokens.length))continue;
-        if(authorTokens.length>=2&&authorHits===0)continue;
-        const priceMatches=[...(`${title} ${snippet}`).matchAll(/(?:от\s*)?(\d[\d\s\u00a0]{0,10}(?:[.,]\d{1,2})?)\s*(?:₽|руб(?:\.|лей|ля)?)/giu)];
-        for(const match of priceMatches){
-          const amount=price(match[1].replace(/[\s\u00a0]/g,"").replace(",","."));
-          if(amount&&amount>=30&&amount<=1000000)valid.push({price:amount,url,title});
-        }
-      }catch{continue;}
-    }
-    if(!valid.length){
-      return {price_from:null,price_to:null,min_price_url:"",source_note:"Google нашёл результаты, но в сниппетах Ozon нет подтверждённых цен точных карточек книги"};
-    }
-    const unique=Array.from(new Map(valid.map(item=>[`${item.url}:${item.price}`,item])).values());
-    const values=unique.map(item=>item.price);
-    const min=Math.min(...values),max=Math.max(...values);
-    const cheapest=unique.find(item=>item.price===min)!;
-    return {price_from:min,price_to:max,min_price_url:cheapest.url,source_note:`Google Search → Ozon: цены извлечены из ${unique.length} найденных карточек; состояние товара в сниппете может быть не указано`};
-  }catch(e){
-    return {price_from:null,price_to:null,min_price_url:"",source_note:`Google Search временно недоступен: ${(e instanceof Error?e.message:String(e)).slice(0,180)}`};
   }
+  const valid:Array<{price:number;url:string;title:string}>=[];
+  for(const result of allResults){
+    const url=str(result?.link);
+    const title=str(result?.title);
+    const snippet=str(result?.snippet);
+    try{
+      const u=new URL(url);
+      if(u.protocol!=="https:"||!(u.hostname==="ozon.ru"||u.hostname.endsWith(".ozon.ru"))||!/^\/product\//i.test(u.pathname))continue;
+      const textToCheck=`${title} ${snippet}`.toLowerCase();
+      const titleTokens=book.title.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((x:string)=>x.length>2);
+      const authorTokens=book.author.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((x:string)=>x.length>1);
+      const titleHits=titleTokens.filter((token:string)=>textToCheck.includes(token)).length;
+      const authorHits=authorTokens.filter((token:string)=>textToCheck.includes(token)).length;
+      if(titleTokens.length&&titleHits<Math.min(2,titleTokens.length))continue;
+      if(authorTokens.length>=2&&authorHits===0)continue;
+      const text=`${result?.price||""} ${result?.snippet||""} ${result?.title||""}`;
+      const matches=[...text.matchAll(/(?:от\s*)?(\d[\d\s\u00a0]{0,10}(?:[.,]\d{1,2})?)\s*(?:₽|руб(?:\.|лей|ля)?)/giu)];
+      for(const match of matches){
+        const amount=price(match[1].replace(/[\s\u00a0]/g,"").replace(",","."));
+        if(amount&&amount>=30&&amount<=1000000)valid.push({price:amount,url,title});
+      }
+    }catch{continue;}
+  }
+  const unique=Array.from(new Map(valid.map(item=>[`${item.url}:${item.price}`,item])).values());
+  if(!unique.length){
+    return {price_from:null,price_to:null,min_price_url:"",source_note:"Google нашёл карточки Ozon, но не обнаружил подтверждённые цены точных совпадений"};
+  }
+  const values=unique.map(item=>item.price);
+  const min=Math.min(...values),max=Math.max(...values);
+  const cheapest=unique.find(item=>item.price===min)!;
+  return {price_from:min,price_to:max,min_price_url:cheapest.url,source_note:`Google Search через Serper → Ozon: ${unique.length} подтверждённых цен; новые и б/у учитываются, если Google показывает их в результате`};
 }
 function parseJson(s:string):any{const t=s.replace(/^```(?:json)?/i,"").replace(/```$/i,"").trim();const a=t.indexOf("{"),b=t.lastIndexOf("}");if(a<0||b<=a)throw new Error("Gemini вернул ответ без JSON");return JSON.parse(t.slice(a,b+1));}
 async function tg(env:Env,method:string,body:Record<string,unknown>):Promise<any>{
