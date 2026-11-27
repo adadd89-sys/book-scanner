@@ -86,7 +86,7 @@ async function inspectBook(image:string,mime:string,caption:string,env:Env):Prom
 Верни только JSON: {"title":"строка","author":"строка","price_from":null,"price_to":null,"min_price_url":"","source_note":"строка"}`;
   const payload={contents:[{role:"user",parts:[{text:prompt},{inline_data:{mime_type:mime,data:image}}]}],
     generationConfig:{responseMimeType:"application/json",thinkingConfig:{thinkingLevel:"LOW"}}};
-  const models=["gemini-4-hydrogen",env.GEMINI_FALLBACK_MODEL||"gemini-3.8-flash"];
+  const models=["gemini-3.8-flash","gemini-3.5-flash-lite"];
   let lastError="Gemini temporarily unavailable";
   const deadline=Date.now()+20000;
   for(const candidate of models){
@@ -120,7 +120,7 @@ async function searchOzonPrices(book:Book,env:Env):Promise<{price_from:number|nu
 Верни только JSON без markdown:
 {"offers":[{"price":число_в_рублях,"url":"полная ссылка на карточку товара Ozon","title":"название из карточки","condition":"новая/б\u002fy"}]}
 Включай только предложения, для которых в найденном результате действительно видны цена и ссылка на конкретную карточку товара Ozon. Не выдумывай цены, URL или товары. Если точных предложений нет, верни {"offers":[]}. Не включай поисковую страницу вместо карточки товара.`;
-  const models=["gemini-4-hydrogen","gemini-3.8-flash"];
+  const models=["gemini-3.8-flash","gemini-3.5-flash-lite"];
   let lastError="";
   const searchDeadline=Date.now()+9500;
   for(const model of models){
