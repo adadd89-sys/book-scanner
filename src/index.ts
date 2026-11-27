@@ -82,8 +82,8 @@ async function inspectBook(image:string,mime:string,caption:string,env:Env):Prom
 На этом этапе НЕ ищи цены и НЕ выдумывай ссылки или стоимость. Для price_from и price_to верни null, для min_price_url верни пустую строку. В source_note напиши: "Название и автор распознаны; оценка цен будет выполнена отдельным этапом".
 Верни только JSON: {"title":"строка","author":"строка","price_from":null,"price_to":null,"min_price_url":"","source_note":"строка"}`;
   const payload={contents:[{role:"user",parts:[{text:prompt},{inline_data:{mime_type:mime,data:image}}]}],
-    generationConfig:{temperature:0.1,responseMimeType:"application/json",thinkingConfig:{thinkingLevel:"minimal"}}};
-  const models=[...new Set([env.GEMINI_MODEL||"gemini-3.8-flash",env.GEMINI_FALLBACK_MODEL||"gemini-3.5-flash-lite"].filter((v):v is string=>Boolean(v)))];
+    generationConfig:{responseMimeType:"application/json",thinkingConfig:{thinkingLevel:"LOW"}}};
+  const models=["gemini-4-hydrogen",env.GEMINI_FALLBACK_MODEL||"gemini-3.8-flash"];
   let lastError="Gemini temporarily unavailable";
   const deadline=Date.now()+20000;
   for(const candidate of models){
