@@ -87,10 +87,10 @@ async function inspectBook(image:string,mime:string,caption:string,env:Env):Prom
 Верни только JSON: {"title":"строка","author":"строка","price_from":null,"price_to":null,"min_price_url":"","source_note":"строка"}`;
   const payload={contents:[{role:"user",parts:[{text:prompt},{inline_data:{mime_type:mime,data:image}}]}],
     generationConfig:{responseMimeType:"application/json",thinkingConfig:{thinkingBudget:0}}};
-  const models=["gemini-2.5-flash","gemini-2.5-flash-lite"];
+  const VISION_MODELS=["gemini-3.5-flash-lite","gemini-3.6-flash","gemini-3.8-flash"];
   let lastError="Gemini temporarily unavailable";
   const deadline=Date.now()+20000;
-  for(const candidate of models){
+  for(const candidate of VISION_MODELS){
     try{
       const remaining=deadline-Date.now();
       if(remaining<1500) break;
