@@ -87,25 +87,22 @@ async function inspectBook(image:string,mime:string,caption:string,env:Env):Prom
   const models=[...new Set([model,env.GEMINI_FALLBACK_MODEL].filter((v):v is string=>Boolean(v)))];
   let data:any=null;
   let lastError="Gemini temporarily unavailable";
-  const deadline=Date.now()+22000;
+  const deadline=Date.now()+27000;
   for(const candidate of models){
     let succeeded=false;
-    for(let attempt=0;attempt<2&&Date.now()<deadline;attempt++){
-      try{
-        const remaining=Math.max(1000,Math.min(9000,deadline-Date.now()));
-        const response=await fetch(`${GEMINI}${encodeURIComponent(candidate)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`,{
-          method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload),
-          signal:AbortSignal.timeout(remaining)
-        });
-        data=await response.json() as any;
-        if(response.ok){succeeded=true;break;}
-        lastError=data?.error?.message||`Gemini API HTTP ${response.status}`;
-        if(response.status!==429&&response.status!==500&&response.status!==502&&response.status!==503&&response.status!==504) break;
-      }catch(e){lastError=e instanceof Error?e.message:String(e);}
-      if(attempt===0&&Date.now()<deadline) await new Promise(resolve=>setTimeout(resolve,700));
-    }
+    try{
+      const remaining=Math.max(1000,Math.min(24000,deadline-Date.now()));
+      const response=await fetch(`${GEMINI}${encodeURIComponent(candidate)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`,{
+        method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload),
+        signal:AbortSignal.timeout(remaining)
+      });
+      data=await response.json() as any;
+      if(response.ok){succeeded=true;}
+      else lastError=data?.error?.message||`Gemini API HTTP ${response.status}`;
+    }catch(e){lastError=e instanceof Error?e.message:String(e);}
     if(succeeded) break;
     data=null;
+    if(Date.now()>=deadline) break;
   }
   if(!data) throw new Error("Gemini временно перегружен или недоступен. Повторите отправку позже. Подробности: "+lastError);
   const raw=data?.candidates?.[0]?.content?.parts?.map((p:any)=>p.text||"").join("")||"";
