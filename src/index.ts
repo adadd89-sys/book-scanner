@@ -62,6 +62,9 @@ async function handlePhoto(message: NonNullable<Update["message"]>,env:Env) {
     const mime=headerMime.startsWith("image/")?headerMime:imageMimeFromPath(path);
     const book=await inspectBook(toBase64(bytes),mime,message.caption||"",env);
     if(!book.title) throw new Error("Название не распознано. Попробуй прислать фото обложки крупнее.");
+    const prices=await searchOzonPrices(book,env);
+    if(prices){book.price_from=prices.price_from;book.price_to=prices.price_to;book.min_price_url=prices.min_price_url;book.source_note=prices.source_note;}
+    else {book.source_note="Книга распознана; подтверждённые предложения Ozon не найдены или поиск временно недоступен";}
     const saved=await fetch(env.GOOGLE_SCRIPT_URL,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({
       secret:env.SHEETS_SECRET,title:book.title,author:book.author,price_from:book.price_from,price_to:book.price_to,
       min_price_url:book.min_price_url,source_note:book.source_note,date:new Date().toISOString()
@@ -108,6 +111,52 @@ async function inspectBook(image:string,mime:string,caption:string,env:Env):Prom
     }catch(e){lastError=e instanceof Error?e.message:String(e);}
   }
   throw new Error("Обе модели Gemini не завершили распознавание. Подробности: "+lastError);
+}
+async function searchOzonPrices(book:Book,env:Env):Promise<{price_from:number|null;price_to:number|null;min_price_url:string;source_note:string}|null>{
+  const prompt=`Найди реальные предложения ТОЛЬКО на Ozon.ru для книги:
+Название: "${book.title}"
+Автор: "${book.author}"
+Ищи точное совпадение названия и автора. Допускаются новые и бывшие в употреблении экземпляры, если карточка именно этой книги. Не используй другие маркетплейсы, объявления, библиотеки или цены из памяти.
+Верни только JSON без markdown:
+{"offers":[{"price":число_в_рублях,"url":"полная ссылка на карточку товара Ozon","title":"название из карточки","condition":"новая/б\u002fy"}]}
+Включай только предложения, для которых в найденном результате действительно видны цена и ссылка на конкретную карточку товара Ozon. Не выдумывай цены, URL или товары. Если точных предложений нет, верни {"offers":[]}. Не включай поисковую страницу вместо карточки товара.`;
+  const models=["gemini-4-hydrogen","gemini-3.8-flash"];
+  let lastError="";
+  for(const model of models){
+    try{
+      const response=await fetch("https://generativelanguage.googleapis.com/v1beta/interactions",{
+        method:"POST",
+        headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY,"Api-Revision":"2026-05-20"},
+        body:JSON.stringify({model,input:prompt,tools:[{type:"google_search"}]}),
+        signal:AbortSignal.timeout(7000)
+      });
+      const data=await response.json() as any;
+      if(!response.ok){lastError=data?.error?.message||`HTTP ${response.status}`;continue;}
+      const interaction=data?.interaction||data;
+      const steps=interaction?.steps||[];
+      const raw=steps.filter((s:any)=>s.type==="model_output").flatMap((s:any)=>s.content||[])
+        .filter((c:any)=>c.type==="text").map((c:any)=>c.text||"").join("\n")
+        ||interaction?.output_text||data?.output_text||"";
+      if(!raw){lastError="Поиск вернул пустой ответ";continue;}
+      const parsed=parseJson(raw);
+      const offers=Array.isArray(parsed.offers)?parsed.offers:[];
+      const valid=offers.map((o:any)=>{
+        const value=price(o.price);
+        const url=str(o.url);
+        try{
+          const u=new URL(url);
+          if(u.protocol!=="https:"||!(u.hostname==="ozon.ru"||u.hostname.endsWith(".ozon.ru"))||!value)return null;
+          return {price:value,url};
+        }catch{return null;}
+      }).filter((o:any)=>o!==null) as Array<{price:number;url:string}>;
+      if(!valid.length)return {price_from:null,price_to:null,min_price_url:"",source_note:"На Ozon не найдено подтверждённых карточек с ценой для точного совпадения книги"};
+      const prices=valid.map(o=>o.price);
+      const min=Math.min(...prices),max=Math.max(...prices);
+      const cheapest=valid.find(o=>o.price===min)!;
+      return {price_from:min,price_to:max,min_price_url:cheapest.url,source_note:`Ozon: проверено ${valid.length} предложений; диапазон по найденным карточкам`};
+    }catch(e){lastError=e instanceof Error?e.message:String(e);}
+  }
+  return null;
 }
 function parseJson(s:string):any{const t=s.replace(/^```(?:json)?/i,"").replace(/```$/i,"").trim();const a=t.indexOf("{"),b=t.lastIndexOf("}");if(a<0||b<=a)throw new Error("Gemini вернул ответ без JSON");return JSON.parse(t.slice(a,b+1));}
 async function tg(env:Env,method:string,body:Record<string,unknown>):Promise<any>{
