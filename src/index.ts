@@ -141,15 +141,15 @@ async function searchOzonPrices(book:Book,env:Env):Promise<{price_from:number|nu
         if(parsedUrl.protocol!=="https:"||!(parsedUrl.hostname==="ozon.ru"||parsedUrl.hostname.endsWith(".ozon.ru")))continue;
         if(!/\/product\//i.test(parsedUrl.pathname))continue;
         const textToCheck=`${title} ${snippet}`.toLowerCase();
-        const titleTokens=book.title.toLowerCase().split(/[^\\p{L}\\p{N}]+/u).filter((x:string)=>x.length>2);
+        const titleTokens=book.title.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((x:string)=>x.length>2);
         const authorTokens=book.author.toLowerCase().split(/[^\\p{L}\\p{N}]+/u).filter((x:string)=>x.length>1);
         const titleHits=titleTokens.filter((token:string)=>textToCheck.includes(token)).length;
         const authorHits=authorTokens.length?authorTokens.filter((token:string)=>textToCheck.includes(token)).length:0;
         if(titleTokens.length&&titleHits<Math.min(2,titleTokens.length))continue;
         if(authorTokens.length>=2&&authorHits===0)continue;
-        const priceMatches=[...(`${title} ${snippet}`).matchAll(/(?:от\\s*)?(\\d[\\d\\s\\u00a0]{0,10}(?:[.,]\\d{1,2})?)\\s*(?:₽|руб(?:\\.|лей|ля)?)/giu)];
+        const priceMatches=[...(`${title} ${snippet}`).matchAll(/(?:от\s*)?(\d[\d\s\u00a0]{0,10}(?:[.,]\d{1,2})?)\s*(?:₽|руб(?:\.|лей|ля)?)/giu)];
         for(const match of priceMatches){
-          const amount=price(match[1].replace(/[\\s\\u00a0]/g,"").replace(",","."));
+          const amount=price(match[1].replace(/[\s\u00a0]/g,"").replace(",","."));
           if(amount&&amount>=30&&amount<=1000000)valid.push({price:amount,url,title});
         }
       }catch{continue;}
