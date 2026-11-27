@@ -4,6 +4,7 @@ export interface Env {
   GOOGLE_SCRIPT_URL: string;
   SHEETS_SECRET: string;
   GEMINI_MODEL?: string;
+  GEMINI_FALLBACK_MODEL?: string;
 }
 interface Update {
   message?: {
@@ -81,13 +82,29 @@ async function inspectBook(image:string,mime:string,caption:string,env:Env):Prom
   const prompt=`Определи книгу по фото обложки: точное название, автора, по возможности конкретное издание. Не угадывай нечитаемые данные — если автор неизвестен, верни пустую строку. Подпись пользователя: ${caption||"нет"}.
 На этом этапе НЕ ищи цены и НЕ выдумывай ссылки или стоимость. Для price_from и price_to верни null, для min_price_url верни пустую строку. В source_note напиши: "Название и автор распознаны; оценка цен будет выполнена отдельным этапом".
 Верни только JSON: {"title":"строка","author":"строка","price_from":null,"price_to":null,"min_price_url":"","source_note":"строка"}`;
-  const response=await fetch(`${GEMINI}${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`,{
-    method:"POST",headers:{"content-type":"application/json"},
-    body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt},{inline_data:{mime_type:mime,data:image}}]}],
-      generationConfig:{temperature:0.1,responseMimeType:"application/json"}})
-  });
-  const data=await response.json() as any;
-  if(!response.ok) throw new Error(data?.error?.message||`Gemini API HTTP ${response.status}`);
+  const payload={contents:[{role:"user",parts:[{text:prompt},{inline_data:{mime_type:mime,data:image}}]}],
+    generationConfig:{temperature:0.1,responseMimeType:"application/json"}};
+  const models=[...new Set([model,env.GEMINI_FALLBACK_MODEL].filter((v):v is string=>Boolean(v)))];
+  let data:any=null;
+  let lastError="Gemini temporarily unavailable";
+  for(const candidate of models){
+    let succeeded=false;
+    for(let attempt=0;attempt<3;attempt++){
+      try{
+        const response=await fetch(`${GEMINI}${encodeURIComponent(candidate)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`,{
+          method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)
+        });
+        data=await response.json() as any;
+        if(response.ok){succeeded=true;break;}
+        lastError=data?.error?.message||`Gemini API HTTP ${response.status}`;
+        if(response.status!==429&&response.status!==500&&response.status!==502&&response.status!==503&&response.status!==504) break;
+      }catch(e){lastError=e instanceof Error?e.message:String(e);}
+      if(attempt<2) await new Promise(resolve=>setTimeout(resolve,1200*(attempt+1)));
+    }
+    if(succeeded) break;
+    data=null;
+  }
+  if(!data) throw new Error("Gemini временно перегружен или недоступен. Повторите отправку позже. Подробности: "+lastError);
   const raw=data?.candidates?.[0]?.content?.parts?.map((p:any)=>p.text||"").join("")||"";
   const parsed=parseJson(raw);
   return {title:str(parsed.title),author:str(parsed.author),price_from:null,price_to:null,min_price_url:"",source_note:str(parsed.source_note)||"Книга распознана; цены пока не оценивались"};
