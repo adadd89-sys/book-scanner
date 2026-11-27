@@ -22,6 +22,9 @@ export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
     if (req.method === "GET" && url.pathname === "/") return out({ok:true,service:"book-scanner"});
+    if (req.method === "GET" && url.pathname === "/diagnose") {
+      return out({ok:true, secretConfigured: Boolean(env.SHEETS_SECRET), secretLength: (env.SHEETS_SECRET || "").length});
+    }
     if (req.method === "GET" && url.pathname.startsWith("/register/")) {
       const secret = decodeURIComponent(url.pathname.slice(10));
       if (!env.SHEETS_SECRET || secret !== env.SHEETS_SECRET) return out({ok:false,error:"Unauthorized"},401);
