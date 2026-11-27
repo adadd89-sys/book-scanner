@@ -71,23 +71,19 @@ async function handlePhoto(message: NonNullable<Update["message"]>,env:Env) {
 }
 async function inspectBook(image:string,mime:string,caption:string,env:Env):Promise<Book>{
   const model=env.GEMINI_MODEL||"gemini-3.8-flash";
-  const prompt=`Определи книгу по фото обложки: точное название, автора, по возможности конкретное издание. Затем поищи актуальные предложения в России: в первую очередь Ozon, затем Авито и другие книжные магазины/букинистические площадки. Оцени диапазон реальных цен в рублях. Не выдумывай цены и ссылки. Не смешивай разные издания с похожим названием. Если цены новой и б/у книги различаются, отметь это. Если цену подтвердить нельзя, верни null. Ссылка должна вести на найденную страницу товара/предложения, если она есть. Подпись пользователя: ${caption||"нет"}.
-Верни только JSON: {"title":"строка","author":"строка","price_from":число или null,"price_to":число или null,"min_price_url":"URL или пустая строка","source_note":"краткое пояснение площадок, цен и неопределённости"}`;
+  const prompt=`Определи книгу по фото обложки: точное название, автора, по возможности конкретное издание. Не угадывай нечитаемые данные — если автор неизвестен, верни пустую строку. Подпись пользователя: ${caption||"нет"}.
+На этом этапе НЕ ищи цены и НЕ выдумывай ссылки или стоимость. Для price_from и price_to верни null, для min_price_url верни пустую строку. В source_note напиши: "Название и автор распознаны; оценка цен будет выполнена отдельным этапом".
+Верни только JSON: {"title":"строка","author":"строка","price_from":null,"price_to":null,"min_price_url":"","source_note":"строка"}`;
   const response=await fetch(`${GEMINI}${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`,{
     method:"POST",headers:{"content-type":"application/json"},
     body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt},{inline_data:{mime_type:mime,data:image}}]}],
-      tools:[{google_search:{}}],generationConfig:{temperature:0.1,responseMimeType:"application/json"}})
+      generationConfig:{temperature:0.1,responseMimeType:"application/json"}})
   });
   const data=await response.json() as any;
   if(!response.ok) throw new Error(data?.error?.message||`Gemini API HTTP ${response.status}`);
   const raw=data?.candidates?.[0]?.content?.parts?.map((p:any)=>p.text||"").join("")||"";
   const parsed=parseJson(raw);
-  const links=(data?.candidates?.[0]?.groundingMetadata?.groundingChunks||[]).map((c:any)=>c?.web?.uri)
-    .filter((u:any)=>typeof u==="string"&&/^https?:\/\//i.test(u));
-  let link=typeof parsed.min_price_url==="string"&&/^https?:\/\//i.test(parsed.min_price_url)?parsed.min_price_url:"";
-  if(!link&&links.length) link=links[0];
-  const note=[str(parsed.source_note),links.length?"Ссылки из поиска: "+[...new Set(links)].slice(0,5).join(" | "):""].filter(Boolean).join(" ");
-  return {title:str(parsed.title),author:str(parsed.author),price_from:price(parsed.price_from),price_to:price(parsed.price_to),min_price_url:link,source_note:note};
+  return {title:str(parsed.title),author:str(parsed.author),price_from:null,price_to:null,min_price_url:"",source_note:str(parsed.source_note)||"Книга распознана; цены пока не оценивались"};
 }
 function parseJson(s:string):any{const t=s.replace(/^```(?:json)?/i,"").replace(/```$/i,"").trim();const a=t.indexOf("{"),b=t.lastIndexOf("}");if(a<0||b<=a)throw new Error("Gemini вернул ответ без JSON");return JSON.parse(t.slice(a,b+1));}
 async function tg(env:Env,method:string,body:Record<string,unknown>):Promise<any>{
