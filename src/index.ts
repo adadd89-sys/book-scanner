@@ -62,8 +62,8 @@ async function handlePhoto(message: NonNullable<Update["message"]>,env:Env) {
     const mime=headerMime.startsWith("image/")?headerMime:imageMimeFromPath(path);
     const book=await inspectBook(toBase64(bytes),mime,message.caption||"",env);
     if(!book.title) throw new Error("Название не распознано. Попробуй прислать фото обложки крупнее.");
-    const prices=await searchOzonPrices(book,env);
-    if(prices){book.price_from=prices.price_from;book.price_to=prices.price_to;book.min_price_url=prices.min_price_url;book.source_note=prices.source_note;}
+    const ozonResult=await searchOzonPrices(book,env);
+    if(ozonResult){book.price_from=ozonResult.price_from;book.price_to=ozonResult.price_to;book.min_price_url=ozonResult.min_price_url;book.source_note=ozonResult.source_note;}
     else {book.source_note="Книга распознана; подтверждённые предложения Ozon не найдены или поиск временно недоступен";}
     const saved=await fetch(env.GOOGLE_SCRIPT_URL,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({
       secret:env.SHEETS_SECRET,title:book.title,author:book.author,price_from:book.price_from,price_to:book.price_to,
@@ -122,13 +122,16 @@ async function searchOzonPrices(book:Book,env:Env):Promise<{price_from:number|nu
 Включай только предложения, для которых в найденном результате действительно видны цена и ссылка на конкретную карточку товара Ozon. Не выдумывай цены, URL или товары. Если точных предложений нет, верни {"offers":[]}. Не включай поисковую страницу вместо карточки товара.`;
   const models=["gemini-4-hydrogen","gemini-3.8-flash"];
   let lastError="";
+  const searchDeadline=Date.now()+9500;
   for(const model of models){
     try{
+      const remaining=searchDeadline-Date.now();
+      if(remaining<1000)break;
       const response=await fetch("https://generativelanguage.googleapis.com/v1beta/interactions",{
         method:"POST",
         headers:{"content-type":"application/json","x-goog-api-key":env.GEMINI_API_KEY,"Api-Revision":"2026-05-20"},
         body:JSON.stringify({model,input:prompt,tools:[{type:"google_search"}]}),
-        signal:AbortSignal.timeout(7000)
+        signal:AbortSignal.timeout(Math.min(5000,remaining-250))
       });
       const data=await response.json() as any;
       if(!response.ok){lastError=data?.error?.message||`HTTP ${response.status}`;continue;}
