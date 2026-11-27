@@ -117,11 +117,7 @@ async function searchOzonPrices(book:Book,env:Env):Promise<{price_from:number|nu
   if(!env.SERPER_API_KEY){
     return {price_from:null,price_to:null,min_price_url:"",source_note:"Поиск Google не подключён: добавь секрет SERPER_API_KEY в Cloudflare Worker"};
   }
-  const queries=[
-    `site:ozon.ru/product "${book.title}" "${book.author}" книга`,
-    `site:ozon.ru "${book.title}" "${book.author}" бу книга`,
-    `site:ozon.ru "${book.title}" "${book.author}" купить`
-  ];
+  const queries=[`site:ozon.ru/product "${book.title}" "${book.author}" книга купить новая б/у`];
   const allResults:any[]=[];
   for(const q of queries){
     try{
